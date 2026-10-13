@@ -9,7 +9,9 @@ GhostSignal is a Streamlit-based prototype that analyses supplied device-activit
 - **Explainable risk scoring:** Shows the points contributed by each triggered rule.
 - **Device investigation:** Displays device activity indicators and a review recommendation.
 - **Data validation:** Identifies records containing invalid or missing numeric values.
-- **Simulated traffic visualisation:** Displays illustrative traffic against a simulated historical baseline.
+- **Interactive triage:** Filter records by case-insensitive device-name search and risk classification; summary metrics cover the full dataset.
+- **Investigation report:** Download the currently filtered records, rule evidence, and data-quality findings as CSV.
+- **Simulated traffic visualisation:** Displays independent illustrative traffic against a seeded historical baseline; the 3× threshold is not a validated security standard.
 - **CSV-based analysis:** Analyses uploaded activity records using a defined set of required columns.
 
 ## Technology Stack

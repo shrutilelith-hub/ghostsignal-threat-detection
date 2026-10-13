@@ -187,6 +187,46 @@ def analyse(df: pd.DataFrame) -> pd.DataFrame:
     return df.sort_values(["priority_score", "device"], ascending=[False, True], na_position="last").reset_index(drop=True)
 
 
+def filter_records(
+    results: pd.DataFrame,
+    search_text: str,
+    classification: str,
+) -> pd.DataFrame:
+    """Filter scored records by a literal, case-insensitive device-name query and class."""
+    matches = pd.Series(True, index=results.index)
+    if search_text:
+        matches &= results["device"].str.contains(search_text, case=False, regex=False, na=False)
+    if classification != "All classifications":
+        matches &= results["status"].eq(classification)
+    return results.loc[matches]
+
+
+def build_investigation_report(results: pd.DataFrame, raw: pd.DataFrame) -> pd.DataFrame:
+    """Create the public report columns without exporting internal scoring fields."""
+    source_rows = raw.iloc[results["_record_id"].astype(int).tolist()]
+    report = pd.DataFrame({
+        "Device": results["device"].tolist(),
+        "Priority score": results["priority_score"].tolist(),
+        "Risk classification": results["status"].tolist(),
+        "Failed connections": source_rows["failed_connections"].tolist(),
+        "External connections": source_rows["external_connections"].tolist(),
+        "Unusual port indicator": source_rows["unusual_port"].tolist(),
+        "Outgoing bytes": source_rows["bytes_out"].tolist(),
+        "Evidence explaining triggered rules": [
+            "; ".join(
+                f"{name} (+{points}): {explanation}"
+                for name, explanation, points in rules
+            ) or "No configured scoring rule triggered"
+            for rules in results["triggered_rules"]
+        ],
+        "Invalid or missing fields": [
+            ", ".join(fields) if fields else "None"
+            for fields in results["invalid_fields"]
+        ],
+    })
+    return report
+
+
 def build_traffic_scenario(scenario: str) -> tuple[pd.DataFrame, float, float | None]:
     """Build reproducible illustrative traffic and compare it with a median baseline."""
     history_rng = random.Random(41)
@@ -274,11 +314,11 @@ high_count = int((results["priority_score"] >= 50).sum())
 review_count = int((results["priority_score"] > 0).sum())
 
 metric_a, metric_b = st.columns(2)
-metric_a.metric("Devices analysed", len(results))
+metric_a.metric("Total records analysed", len(results))
 metric_b.metric("High-priority reviews", high_count)
 metric_c, metric_d = st.columns(2)
-metric_c.metric("Devices with triggered rules", review_count)
-metric_d.metric("Rows needing data review", invalid_count)
+metric_c.metric("Records with at least one triggered rule", review_count)
+metric_d.metric("Records needing data review", invalid_count)
 
 if invalid_count:
     st.warning(
@@ -287,22 +327,60 @@ if invalid_count:
     )
 
 st.subheader("Device triage overview")
+filter_search, filter_classification = st.columns([2, 1])
+with filter_search:
+    search_text = st.text_input(
+        "Search devices",
+        placeholder="Enter part of a device name",
+        help="Case-insensitive literal text search; characters such as .* are not treated as patterns.",
+    )
+with filter_classification:
+    classification = st.selectbox(
+        "Risk classification",
+        [
+            "All classifications",
+            "High-priority review",
+            "Review recommended",
+            "No configured rule triggered",
+        ],
+    )
+
+filtered_results = filter_records(results, search_text, classification)
+st.caption(f"{len(filtered_results)} matching record(s) out of {len(results)} analysed.")
 display_cols = [
-    "device", "priority_score", "status", "failed_connections", "external_connections", "unusual_port", "bytes_out"
+    "device", "priority_score", "status", "failed_connections", "external_connections",
+    "unusual_port", "bytes_out", "data_quality",
 ]
-st.dataframe(
-    results[display_cols],
-    width="stretch",
-    hide_index=True,
-    column_config={
-        "device": st.column_config.TextColumn("Device"),
-        "priority_score": st.column_config.ProgressColumn("Priority score", min_value=0, max_value=100, format="%d/100"),
-        "status": st.column_config.TextColumn("Risk classification"),
-        "failed_connections": st.column_config.NumberColumn("Failed connections", format="%d"),
-        "external_connections": st.column_config.NumberColumn("External connections", format="%d"),
-        "unusual_port": st.column_config.NumberColumn("Unusual port flag", format="%d"),
-        "bytes_out": st.column_config.NumberColumn("Outgoing bytes", format="%d"),
-    },
+if filtered_results.empty:
+    st.info("No records match the current search and classification filters.")
+else:
+    display_results = filtered_results.drop(columns=["invalid_fields"]).copy()
+    display_results["data_quality"] = filtered_results["invalid_fields"].map(
+        lambda fields: ", ".join(fields) if fields else "None"
+    )
+    st.dataframe(
+        display_results[display_cols],
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "device": st.column_config.TextColumn("Device"),
+            "priority_score": st.column_config.ProgressColumn("Priority score", min_value=0, max_value=100, format="%d/100"),
+            "status": st.column_config.TextColumn("Risk classification"),
+            "failed_connections": st.column_config.NumberColumn("Failed connections", format="%d"),
+            "external_connections": st.column_config.NumberColumn("External connections", format="%d"),
+            "unusual_port": st.column_config.NumberColumn("Unusual port flag", format="%d"),
+            "bytes_out": st.column_config.NumberColumn("Outgoing bytes", format="%d"),
+            "data_quality": st.column_config.TextColumn("Invalid or missing fields"),
+        },
+    )
+
+st.download_button(
+    "Download investigation report",
+    data=build_investigation_report(filtered_results, raw).to_csv(index=False).encode("utf-8"),
+    file_name="ghostsignal_investigation_report.csv",
+    mime="text/csv",
+    disabled=filtered_results.empty,
+    help="Exports only records currently matching the search and classification filters.",
 )
 
 st.subheader("Traffic over time")
@@ -362,7 +440,11 @@ if ratio is not None and ratio >= 3:
     )
 else:
     st.success("The latest simulated interval is below the illustrative 3× baseline anomaly threshold.")
-st.caption("Baseline is the median of 21 seeded, simulated normal historical intervals. No historical baseline is inferred from the uploaded CSV.")
+st.caption(
+    "Baseline is the median of 21 seeded, simulated normal historical intervals. "
+    "The 3× threshold is illustrative, not a validated cybersecurity standard; "
+    "no historical baseline is inferred from the uploaded CSV."
+)
 
 st.subheader("Investigate a device")
 if not results.empty:
@@ -400,7 +482,10 @@ if not results.empty:
         else:
             st.info("Recommendation: review the triggered indicators and check whether the behaviour is expected.")
     else:
-        st.success("No configured scoring rule was triggered for this record. This does not guarantee the device is safe.")
+        st.info(
+            "No configured scoring rule was triggered for the known values. "
+            "This is not evidence that the device is safe."
+        )
     if item["invalid_fields"]:
         st.warning("Scoring is incomplete for: " + ", ".join(item["invalid_fields"]) + ". Correct these values before relying on the score.")
 else:

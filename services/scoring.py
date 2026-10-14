@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
+
 import pandas as pd
 
 
@@ -9,16 +11,47 @@ REQUIRED = ["device", "failed_connections", "external_connections", "unusual_por
 NUMERIC_FIELDS = ["failed_connections", "external_connections", "unusual_port", "bytes_out"]
 
 
+def _validated_integer(value, field: str) -> int | None:
+    if isinstance(value, bool) or pd.isna(value):
+        return None
+    try:
+        number = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError):
+        return None
+    if not number.is_finite() or number < 0 or number != number.to_integral_value():
+        return None
+    integer = int(number)
+    if field == "unusual_port" and integer not in {0, 1}:
+        return None
+    return integer
+
+
 def analyse(df: pd.DataFrame) -> pd.DataFrame:
     """Score known values and retain a row-level record of invalid numeric fields."""
     df = df.copy()
     invalid_fields = [[] for _ in range(len(df))]
+    device_names = []
+    for position, value in enumerate(df["device"]):
+        if pd.isna(value) or not str(value).strip():
+            invalid_fields[position].append("device")
+            record_id = (
+                df["_record_id"].iloc[position]
+                if "_record_id" in df.columns
+                else position
+            )
+            device_names.append(f"Unnamed device (record {record_id})")
+        else:
+            device_names.append(str(value).strip())
+    df["device"] = device_names
+
     for field in NUMERIC_FIELDS:
-        converted = pd.to_numeric(df[field], errors="coerce")
-        for position, value in enumerate(converted):
-            if pd.isna(value):
+        converted = []
+        for position, value in enumerate(df[field]):
+            integer = _validated_integer(value, field)
+            converted.append(integer)
+            if integer is None:
                 invalid_fields[position].append(field)
-        df[field] = converted
+        df[field] = pd.Series(converted, index=df.index, dtype="object")
 
     scores, explanations, statuses, triggered_rules = [], [], [], []
     for position, (_, row) in enumerate(df.iterrows()):

@@ -89,7 +89,10 @@ def aggregate_device_events(
             if event["external_connections"] is not None:
                 external_values.append(event["external_connections"])
             elif event_type in GENERIC_CONNECTION_TYPES:
-                if (
+                direction = event["direction"]
+                if direction == "inbound":
+                    external_values.append(0)
+                elif direction == "outbound" and (
                     networks
                     and event["source_ip"] is not None
                     and event["destination_ip"] is not None
@@ -120,23 +123,11 @@ def aggregate_device_events(
             and all(direction in {"inbound", "outbound"} for direction in directions)
             and all(event["bytes_out"] is not None for event in outbound_events)
         )
-        direct_byte_events = [
-            event for event in device_events
-            if event["event_type"].casefold() not in GENERIC_CONNECTION_TYPES
-        ]
-        direct_bytes_complete = all(event["bytes_out"] is not None for event in direct_byte_events)
-        if connections and generic_bytes_complete and direct_bytes_complete:
-            bytes_out = sum(event["bytes_out"] for event in outbound_events) + sum(
-                event["bytes_out"] for event in direct_byte_events
-            )
-        elif connections:
-            bytes_out = None
-        else:
-            bytes_out = (
-                sum(event["bytes_out"] for event in device_events)
-                if device_events and all(event["bytes_out"] is not None for event in device_events)
-                else None
-            )
+        bytes_out = (
+            sum(event["bytes_out"] for event in outbound_events)
+            if connections and generic_bytes_complete
+            else None
+        )
 
         unusual_values = []
         unusual_incomplete = False
@@ -191,13 +182,15 @@ def count_scoring_usable_events(
 
         event_type = event["event_type"].casefold()
         if event_type not in GENERIC_CONNECTION_TYPES:
-            if event["bytes_out"] is not None:
-                usable += 1
             continue
         has_external_inputs = (
-            networks
-            and event["source_ip"] is not None
-            and event["destination_ip"] is not None
+            event["direction"] == "inbound"
+            or (
+                event["direction"] == "outbound"
+                and networks
+                and event["source_ip"] is not None
+                and event["destination_ip"] is not None
+            )
         )
         has_unusual_port_inputs = bool(
             unusual_ports and event["destination_port"] is not None

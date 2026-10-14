@@ -84,7 +84,7 @@ The JSONL adapter accepts one JSON object per line. The following fields are req
 | `device` | Device identifier used for grouping |
 | `event_type` | Event category; connection aggregation recognizes `connection`, `network_connection`, and `firewall_connection` |
 
-Optional normalized fields are `event_id`, `source_ip`, `destination_ip`, `source_port`, `destination_port`, `protocol`, `action`, `direction` (`inbound` or `outbound` for aggregation), `bytes_in`, and `bytes_out`. Addresses, ports, timestamps, and integer byte counts are validated. Missing optionals remain unavailable. The app keeps only this recognized connection metadata; it does not retain arbitrary JSON payload fields. Identical IDs are deduplicated within the imported batch; conflicting records with the same ID are rejected. There is no persistent event store or cross-upload deduplication. Events are sorted by normalized timestamp, not arrival order.
+Optional normalized fields are `event_id`, `source_ip`, `destination_ip`, `source_port`, `destination_port`, `protocol`, `action`, `direction` (`inbound` or `outbound` for aggregation), `bytes_in`, and `bytes_out`. Non-empty direction values are trimmed, case-normalized, and must be `inbound` or `outbound`; genuinely missing/blank direction remains unavailable. Addresses, ports, timestamps, and integer byte counts are validated. Missing optionals remain unavailable. The app keeps only this recognized connection metadata; it does not retain arbitrary JSON payload fields. Identical IDs are deduplicated within the imported batch; conflicting records with the same ID are rejected. There is no persistent event store or cross-upload deduplication. Events are sorted by normalized timestamp, not arrival order.
 
 RFC 5424 syslog is supported only when its message portion is a JSON object using these event fields. The syslog hostname supplies `source` and `device` when the JSON message omits them. This is an adapter format, not universal vendor syslog support. RFC 3164 and vendor-specific message parsing are not implemented.
 
@@ -109,8 +109,8 @@ Uploads are capped at 5 MiB. Validation rejections show line numbers and reason,
 Aggregation operates on the **entire uploaded batch per device**, not a rolling window. Rules and thresholds are unchanged:
 
 - Failed connections count only explicit `failed`, `failure`, or `connection_failed` actions on recognized connection event types. `denied`, `blocked`, and `rejected` actions are not counted as failed connections.
-- External connections count outbound records whose source address is within one of the configured internal CIDRs and destination address is outside all configured networks. This counts valid connection-event records regardless of outcome, not proven unique sessions. The default CIDRs cover RFC 1918 IPv4 ranges; adjust them for the network being analysed.
-- Outgoing bytes are summed only for outbound connection records when each outbound record provides `bytes_out`. If required information is absent, that scoring input stays unavailable.
+- External connections are derived only for outbound records whose source address is within one of the configured internal CIDRs and destination address is outside all configured networks. Inbound records do not count as external connections. This counts valid connection-event records regardless of outcome, not proven unique sessions. The default CIDRs cover RFC 1918 IPv4 ranges; adjust them for the network being analysed.
+- Outgoing bytes are summed only from recognized individual connection/flow records with an outbound direction and a `bytes_out` count. Category-summary event byte fields are ignored and are never mixed with flow totals. If a flow direction or required outbound byte count is unavailable, that scoring input stays unavailable.
 - `unusual_port` is evaluated only when a destination-port list is configured and all connection records have a destination port. The list is a local analyst configuration, not a built-in threat-intelligence feed.
 
 Unavailable aggregate inputs are reported as missing and do not trigger rules. A score of zero is not proof of safety; scores prioritize review and do not estimate compromise probability.
@@ -145,6 +145,8 @@ Laptop-01,2,5,0,500000
 - `external_connections`: Number of external connections.
 - `unusual_port`: `1` if the record flags unusual port activity; otherwise `0`.
 - `bytes_out`: Outgoing data volume in bytes, not megabytes.
+
+The four numeric CSV fields must contain non-negative integer values; `unusual_port` must be `0` or `1`. Fractional, negative, missing, or otherwise invalid values remain unknown and are flagged in the data-quality column. Blank or whitespace-only device names are flagged and assigned distinct display labels by record position so separate rows are not merged under a shared placeholder.
 
 ## Demonstration Scoring Rules
 

@@ -126,6 +126,12 @@ def normalize_event(record: dict[str, Any]) -> dict[str, Any]:
 
     raw_event_type = _required_text(record, "event_type")
     event_type = ALIAS_EVENT_TYPES.get(raw_event_type.casefold(), raw_event_type.casefold())
+    direction = _optional_text(record, "direction")
+    if direction is not None:
+        direction = direction.casefold()
+        if direction not in {"inbound", "outbound"}:
+            raise ValueError("direction must be 'inbound' or 'outbound'")
+
     event = {
         "timestamp": timestamp_text,
         "source": _required_text(record, "source"),
@@ -137,7 +143,7 @@ def normalize_event(record: dict[str, Any]) -> dict[str, Any]:
         "protocol": _optional_text(record, "protocol"),
         "event_type": event_type,
         "action": _optional_text(record, "action"),
-        "direction": _optional_text(record, "direction"),
+        "direction": direction,
         "bytes_in": _optional_integer(record, "bytes_in", 2**63 - 1),
         "bytes_out": _optional_integer(record, "bytes_out", 2**63 - 1),
         "failed_connections": _optional_integer(record, "failed_connections", 2**63 - 1),

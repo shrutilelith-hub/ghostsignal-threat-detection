@@ -59,6 +59,27 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertTrue(any("missing required columns" in item.value for item in app.error))
         self.assertTrue(app.dataframe[0].value.empty)
 
+    def test_csv_blank_devices_and_invalid_numbers_are_flagged(self):
+        app = choose_input(run_app(), "Upload device-summary CSV")
+        csv_data = (
+            b"device,failed_connections,external_connections,unusual_port,bytes_out\n"
+            b",-1,0,0,0\n"
+            b"   ,0,1.5,2,10.25\n"
+        )
+        app.file_uploader[0].set_value(("invalid-rows.csv", csv_data, "text/csv"))
+        app.run(timeout=20)
+        self.assertFalse(app.exception)
+        records = app.dataframe[0].value
+        self.assertEqual(
+            records["device"].tolist(),
+            ["Unnamed device (record 0)", "Unnamed device (record 1)"],
+        )
+        self.assertIn("device", records.iloc[0]["data_quality"])
+        self.assertIn("failed_connections", records.iloc[0]["data_quality"])
+        self.assertIn("external_connections", records.iloc[1]["data_quality"])
+        self.assertIn("unusual_port", records.iloc[1]["data_quality"])
+        self.assertIn("bytes_out", records.iloc[1]["data_quality"])
+
 
 if __name__ == "__main__":
     unittest.main()

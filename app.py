@@ -723,7 +723,6 @@ if rejected_events:
             st.caption(f"{len(rejected_events) - 50} additional rejection messages were omitted.")
 
 if not raw.empty:
-    raw["device"] = raw["device"].fillna("Unknown device").astype(str)
     if "_record_id" not in raw.columns:
         raw["_record_id"] = range(len(raw))
 else:

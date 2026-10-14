@@ -60,6 +60,40 @@ class ScoringTests(unittest.TestCase):
         self.assertTrue(empty.empty)
         self.assertTrue(filter_records(empty, "", "All classifications").empty)
 
+    def test_negative_fractional_and_out_of_range_values_are_invalid(self):
+        source = pd.DataFrame([
+            {
+                "device": "Invalid counters",
+                "failed_connections": -1,
+                "external_connections": 1.5,
+                "unusual_port": 2,
+                "bytes_out": 10.25,
+            },
+        ])
+        scored = analyse(source).iloc[0]
+        self.assertEqual(scored["priority_score"], 0)
+        self.assertEqual(
+            set(scored["invalid_fields"]),
+            {"failed_connections", "external_connections", "unusual_port", "bytes_out"},
+        )
+        self.assertTrue(all(pd.isna(scored[field]) for field in (
+            "failed_connections", "external_connections", "unusual_port", "bytes_out"
+        )))
+
+    def test_blank_device_names_are_flagged_and_kept_as_distinct_records(self):
+        source = pd.DataFrame([
+            {"device": None, "failed_connections": 0, "external_connections": 0, "unusual_port": 0, "bytes_out": 0},
+            {"device": "   ", "failed_connections": 0, "external_connections": 0, "unusual_port": 0, "bytes_out": 0},
+        ])
+        source["_record_id"] = [4, 9]
+        scored = analyse(source)
+        self.assertEqual(
+            scored["device"].tolist(),
+            ["Unnamed device (record 4)", "Unnamed device (record 9)"],
+        )
+        self.assertEqual(len(set(scored["device"])), 2)
+        self.assertTrue(all("device" in fields for fields in scored["invalid_fields"]))
+
 
 if __name__ == "__main__":
     unittest.main()

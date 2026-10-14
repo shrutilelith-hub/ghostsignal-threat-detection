@@ -42,6 +42,14 @@ class StructuredLogTests(unittest.TestCase):
         self.assertEqual(normalized["direction"], None)
         self.assertEqual(len(normalized["event_id"]), 64)
 
+    def test_direction_is_normalized_and_invalid_values_are_rejected(self):
+        normalized = parse_event_line(json.dumps(event(direction="  OUTBOUND ")))
+        self.assertEqual(normalized["direction"], "outbound")
+        missing = parse_event_line(json.dumps(event(direction="   ")))
+        self.assertIsNone(missing["direction"])
+        with self.assertRaisesRegex(ValueError, "direction must be"):
+            parse_event_line(json.dumps(event(direction="sideways")))
+
     def test_rejects_missing_invalid_fields_and_malformed_json(self):
         cases = [
             ({**event(), "device": ""}, "device"),
@@ -143,20 +151,31 @@ class AggregationTests(unittest.TestCase):
         self.assertIn("external_connections", scored.loc["Test-Camera", "invalid_fields"])
 
     def test_explicit_event_metrics_can_reach_combined_score_of_100(self):
-        record = event(
-            event_id="combined-score",
-            event_type="connection_failed",
-            action=None,
-            direction=None,
-            source_ip=None,
-            destination_ip=None,
-            destination_port=None,
-            failed_connections=10,
-            external_connections=20,
-            unusual_port=1,
-            bytes_out=5_000_001,
+        records = [
+            event(
+                event_id="combined-score-summary",
+                event_type="connection_failed",
+                action=None,
+                direction=None,
+                source_ip=None,
+                destination_ip=None,
+                destination_port=None,
+                failed_connections=10,
+                external_connections=20,
+                unusual_port=1,
+                bytes_out=None,
+            ),
+            event(
+                event_id="combined-score-flow",
+                failed_connections=0,
+                external_connections=0,
+                unusual_port=0,
+                bytes_out=5_000_001,
+            ),
+        ]
+        events, rejected, _ = ingest_event_text(
+            "\n".join(json.dumps(record) for record in records)
         )
-        events, rejected, _ = ingest_event_text(json.dumps(record))
         self.assertFalse(rejected)
 
         summary = aggregate_device_events(events, [], set())[0]
@@ -232,6 +251,40 @@ class AggregationTests(unittest.TestCase):
         self.assertEqual(summary["external_connections"], 3)
         self.assertEqual(summary["unusual_port"], 1)
         self.assertEqual(summary["bytes_out"], 3072)
+
+    def test_inbound_internal_to_external_flow_does_not_count_as_external(self):
+        events, rejected, _ = ingest_event_text(json.dumps(event(
+            event_id="inbound-external-address",
+            direction="inbound",
+        )))
+        self.assertFalse(rejected)
+        summary = aggregate_device_events(events, ["192.168.1.0/24"], set())[0]
+        self.assertEqual(summary["external_connections"], 0)
+
+    def test_category_bytes_are_not_mixed_with_connection_flow_bytes(self):
+        records = [
+            event(
+                event_id="category-with-bytes",
+                event_type="connection_failed",
+                direction=None,
+                action=None,
+                bytes_out=6_000_000,
+            ),
+            event(
+                event_id="outbound-flow",
+                direction="outbound",
+                bytes_out=1200,
+            ),
+        ]
+        events, rejected, _ = ingest_event_text(
+            "\n".join(json.dumps(record) for record in records)
+        )
+        self.assertFalse(rejected)
+        self.assertEqual(aggregate_device_events(events, [], set())[0]["bytes_out"], 1200)
+
+        category_only, rejected, _ = ingest_event_text(json.dumps(records[0]))
+        self.assertFalse(rejected)
+        self.assertIsNone(aggregate_device_events(category_only, [], set())[0]["bytes_out"])
 
     def test_missing_aggregation_inputs_remain_unknown(self):
         events, _, _ = ingest_event_text(

@@ -1,0 +1,1 @@
+"""GhostSignal automated tests."""
